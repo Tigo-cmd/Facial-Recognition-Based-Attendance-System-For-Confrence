@@ -16,7 +16,7 @@ CORS(app)
 # Google Sheets setup
 SERVICE_ACCOUNT_FILE = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
 SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
-SHEET_NAME = os.getenv('SHEET_NAME', 'Attendance')
+SHEET_NAME = os.getenv('SHEET_NAME')
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 # SERVICE_ACCOUNT_FILE = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', 'service-account.json')
 # SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID', '<YOUR_SPREADSHEET_ID>')

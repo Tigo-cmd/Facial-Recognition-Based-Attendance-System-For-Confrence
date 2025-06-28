@@ -6,7 +6,7 @@ import { useCamera } from '../hooks/useCamera';
 import { AttendanceRecord, RecognitionResult } from '../types';
 import { Camera, CheckCircle, XCircle, Clock, Users, UserPlus, ArrowLeft } from 'lucide-react';
 
-const BACKEND_URL = 'http://localhost:3001';
+const BACKEND_URL = 'https://emmanueltigo.pythonanywhere.com/';
 
 export const Attendance: React.FC = () => {
   const navigate = useNavigate();
