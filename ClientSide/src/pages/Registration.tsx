@@ -1,108 +1,64 @@
-// Registration.tsx
+// Registration.tsx (Updated to use face-api.js)
 import React, { useRef, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConference } from '../context/ConferenceContext';
-import { FaceService } from '../services/faceService';
 import { useCamera } from '../hooks/useCamera';
 import { Attendee } from '../types';
-import { UserPlus, Camera, Check, X, ArrowRight, Loader } from 'lucide-react';
+import * as faceapi from 'face-api.js';
+import { Camera, Check, X, ArrowRight, Loader } from 'lucide-react';
 
 export const Registration: React.FC = () => {
   const navigate = useNavigate();
   const { attendees, addAttendee } = useConference();
-  const [formData, setFormData] = useState({
-    name: '',
-    email: '',
-    phone: '',
-    organization: '',
-    jobTitle: ''
-  });
+  const [formData, setFormData] = useState({ name: '', email: '', phone: '', organization: '', jobTitle: '' });
   const [isCapturing, setIsCapturing] = useState(false);
   const [captureStep, setCaptureStep] = useState<'idle' | 'starting' | 'positioning' | 'capturing' | 'processing'>('idle');
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // useCamera provides videoRef, isActive, error, startCamera, stopCamera
   const { videoRef, isActive, error, startCamera, stopCamera } = useCamera();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [videoReady, setVideoReady] = useState(false);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+
+  // Load face-api models on component mount
+  useEffect(() => {
+    const loadModels = async () => {
+      const MODEL_URL = '/models';
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+      ]);
+      setModelsLoaded(true);
+    };
+    loadModels();
+  }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData(prev => ({
-      ...prev,
-      [e.target.name]: e.target.value
-    }));
+    setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
-  const isFormValid = () => {
-    return Object.values(formData).every(value => value.trim() !== '');
-  };
+  const isFormValid = () => Object.values(formData).every(v => v.trim() !== '') && modelsLoaded;
 
   const getCaptureStepMessage = () => {
     switch (captureStep) {
-      case 'starting':
-        return 'Starting camera...';
-      case 'positioning':
-        return 'Position your face in the camera frame...';
-      case 'capturing':
-        return 'Capturing your face...';
-      case 'processing':
-        return 'Processing face data...';
-      default:
-        return '';
+      case 'starting': return 'Starting camera...';
+      case 'positioning': return 'Position your face in the camera frame...';
+      case 'capturing': return 'Capturing your face...';
+      case 'processing': return 'Processing face data...';
+      default: return '';
     }
   };
 
-  // Helper: wait for video to be ready (readyState>=2 and dimensions>0), up to timeout ms
-  const waitForVideoReady = (timeout = 5000): Promise<void> => {
-    return new Promise((resolve, reject) => {
-      const video = videoRef.current;
-      if (!video) {
-        reject(new Error('No video element'));
-        return;
-      }
-      if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
-        resolve();
-        return;
-      }
-      let settled = false;
-      const onReady = () => {
-        if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
-          cleanup();
-          settled = true;
-          resolve();
-        }
-      };
-      const cleanup = () => {
-        video.removeEventListener('loadeddata', onReady);
-        video.removeEventListener('canplay', onReady);
-      };
-      video.addEventListener('loadeddata', onReady);
-      video.addEventListener('canplay', onReady);
-      const timer = setTimeout(() => {
-        if (!settled) {
-          cleanup();
-          reject(new Error('Camera did not start in time.'));
-        }
-      }, timeout);
-    });
-  };
-
-  // When camera becomes active, watch for readyState to set videoReady
   useEffect(() => {
-    if (!isActive) {
-      setVideoReady(false);
-      return;
-    }
+    if (!isActive) return setVideoReady(false);
     const video = videoRef.current;
     if (!video) return;
     const checkReady = () => {
-      if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
-        setVideoReady(true);
-      }
+      if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) setVideoReady(true);
     };
     video.addEventListener('loadeddata', checkReady);
     video.addEventListener('canplay', checkReady);
-    // Also check immediately
     checkReady();
     return () => {
       video.removeEventListener('loadeddata', checkReady);
@@ -110,75 +66,65 @@ export const Registration: React.FC = () => {
     };
   }, [isActive]);
 
-  // Live overlay drawing when active & ready
   useEffect(() => {
-    if (!isActive || !videoReady) {
-      // clear canvas if present
+    if (!isActive || !videoReady || !modelsLoaded) {
       const canvas = canvasRef.current;
-      const video = videoRef.current;
-      if (canvas && video) {
-        const ctx = canvas.getContext('2d');
-        if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
-      }
+      if (canvas) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
       return;
     }
     let animationId: number;
     const drawLoop = async () => {
       const video = videoRef.current;
       const canvas = canvasRef.current;
-      if (video && canvas && videoReady) {
-        // Ensure canvas matches video size
+      if (video && canvas) {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
-        const detection = await FaceService.detectFace(video);
-        FaceService.drawDetection(canvas, video, detection);
+        const displaySize = { width: video.videoWidth, height: video.videoHeight };
+        const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+          .withFaceLandmarks();
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          const resized = faceapi.resizeResults(detections, displaySize);
+          faceapi.draw.drawDetections(canvas, resized);
+          faceapi.draw.drawFaceLandmarks(canvas, resized);
+        }
       }
       animationId = requestAnimationFrame(drawLoop);
     };
     drawLoop();
-    return () => {
-      cancelAnimationFrame(animationId);
-    };
-  }, [isActive, videoReady]);
+    return () => cancelAnimationFrame(animationId);
+  }, [isActive, videoReady, modelsLoaded]);
 
   const handleRegister = async () => {
-    if (!isFormValid()) {
-      setMessage({ type: 'error', text: 'Please fill in all fields' });
-      return;
-    }
-    if (attendees.some(a => a.email === formData.email.trim())) {
-      setMessage({ type: 'error', text: 'Email already registered' });
-      return;
-    }
+    if (!isFormValid()) return setMessage({ type: 'error', text: 'Ensure all fields are filled and models loaded.' });
+    if (attendees.some(a => a.email === formData.email.trim()))
+      return setMessage({ type: 'error', text: 'Email already registered' });
 
     setIsCapturing(true);
     setCaptureStep('starting');
     setMessage(null);
 
     try {
-      // Start camera via useCamera
       await startCamera();
-
-      // Wait until videoRef is ready
-      await waitForVideoReady(5000);
-      // small delay to ensure first frame painted
-      await new Promise(res => setTimeout(res, 200));
-
       setCaptureStep('positioning');
-      // Allow user to position; 3s
       await new Promise(res => setTimeout(res, 3000));
 
       setCaptureStep('capturing');
-      // brief pause before capture
-      await new Promise(res => setTimeout(res, 1000));
+      await new Promise(res => setTimeout(res, 500));
 
       setCaptureStep('processing');
       const video = videoRef.current;
-      if (!video) throw new Error('Camera not ready. Please try again.');
+      if (!video) throw new Error('Camera not ready.');
 
-      // Extract descriptor (FaceService.wait internally ensures ready)
-      const faceDescriptor = await FaceService.extractFaceDescriptor(video);
-      // Create new attendee
+      // Perform face detection + descriptor
+      const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+        .withFaceLandmarks()
+        .withFaceDescriptor();
+      if (!detection) throw new Error('No face detected during registration.');
+
+      const descriptor = Array.from(detection.descriptor);
+
       const newAttendee: Attendee = {
         id: Date.now().toString(),
         name: formData.name.trim(),
@@ -186,30 +132,17 @@ export const Registration: React.FC = () => {
         phone: formData.phone.trim(),
         organization: formData.organization.trim(),
         jobTitle: formData.jobTitle.trim(),
-        faceDescriptor,
+        faceDescriptor: descriptor,
         registeredAt: new Date()
       };
       addAttendee(newAttendee);
       setMessage({ type: 'success', text: `Registration successful for ${formData.name.trim()}!` });
-
-      // Reset form data
-      setFormData({
-        name: '',
-        email: '',
-        phone: '',
-        organization: '',
-        jobTitle: ''
-      });
-
-      // After short delay, navigate
-      setTimeout(() => {
-        navigate('/attendance');
-      }, 2000);
+      setFormData({ name: '', email: '', phone: '', organization: '', jobTitle: '' });
+      setTimeout(() => navigate('/attendance'), 2000);
     } catch (err) {
       console.error('Registration error:', err);
       setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Registration failed' });
     } finally {
-      // Stop camera and reset states
       stopCamera();
       setIsCapturing(false);
       setCaptureStep('idle');
@@ -229,7 +162,7 @@ export const Registration: React.FC = () => {
         {/* Registration Form */}
         <div className="bg-white rounded-xl shadow-lg p-8">
           <div className="flex items-center gap-3 mb-6">
-            <UserPlus className="w-6 h-6 text-blue-600" />
+            <Camera className="w-6 h-6 text-blue-600" />
             <h3 className="text-xl font-semibold text-gray-800">Personal Information</h3>
           </div>
           <div className="space-y-4">
@@ -268,7 +201,6 @@ export const Registration: React.FC = () => {
             <h3 className="text-xl font-semibold text-gray-800">Face Registration</h3>
           </div>
 
-          {/* Single video element: hidden when inactive, shown when active */}
           <div className="relative">
             <video
               ref={videoRef}
@@ -277,7 +209,6 @@ export const Registration: React.FC = () => {
               playsInline
               className={isActive ? 'w-full h-80 bg-black rounded-lg object-cover' : 'w-0 h-0 invisible'}
             />
-            {/* Canvas overlay */}
             {isActive && (
               <canvas
                 ref={canvasRef}
@@ -285,8 +216,8 @@ export const Registration: React.FC = () => {
                   position: 'absolute',
                   top: 0,
                   left: 0,
-                  width: videoRef.current ? videoRef.current.clientWidth : undefined,
-                  height: videoRef.current ? videoRef.current.clientHeight : undefined
+                  width: videoRef.current?.clientWidth,
+                  height: videoRef.current?.clientHeight
                 }}
                 className="rounded-lg pointer-events-none"
               />
@@ -308,10 +239,9 @@ export const Registration: React.FC = () => {
               <button
                 onClick={handleRegister}
                 disabled={!isFormValid() || isCapturing}
-                className={`bg-gradient-to-r ${
-                  (!isFormValid() || isCapturing)
-                    ? 'from-gray-400 to-gray-400 cursor-not-allowed'
-                    : 'from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700'
+                className={`bg-gradient-to-r ${(!isFormValid() || isCapturing)
+                  ? 'from-gray-400 to-gray-400 cursor-not-allowed'
+                  : 'from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700'
                 } text-white px-8 py-3 rounded-lg transition-all duration-200 transform hover:scale-105`}
               >
                 {isCapturing ? getCaptureStepMessage() : 'Register & Capture Face'}
@@ -320,7 +250,6 @@ export const Registration: React.FC = () => {
           ) : (
             <div className="space-y-4 mt-4">
               <div className="relative">
-                {/* Video shown above */}
                 <div className="absolute top-4 left-4 bg-red-500 text-white px-3 py-1 rounded-full text-sm font-medium flex items-center gap-2">
                   <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
                   {getCaptureStepMessage() || 'Recording'}
@@ -341,8 +270,8 @@ export const Registration: React.FC = () => {
 
           {message && (
             <div className={`flex items-center gap-2 p-4 rounded-lg mt-4 ${
-              message.type === 'success' 
-                ? 'bg-green-50 text-green-700' 
+              message.type === 'success'
+                ? 'bg-green-50 text-green-700'
                 : 'bg-red-50 text-red-700'
             }`}>
               {message.type === 'success' ? (
